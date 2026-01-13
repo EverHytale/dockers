@@ -1,0 +1,127 @@
+# =============================================================================
+# Hytale Dedicated Server - Docker Compose Configuration
+# Repository: https://github.com/everhytale/dockers
+# Image: everhytale/hytale-server (Docker Hub)
+# =============================================================================
+# Directory structure:
+#   /opt/hytale-server/  - Game files (read-only, in image)
+#   /server/             - All server data (mounted volume)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  hytale-server:
+    # Use pre-built image from Docker Hub
+    # Available tags: latest, rc, dev, edge, X.Y.Z
+    image: everhytale/hytale-server:latest
+
+    # Or build locally (uncomment below and comment above)
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   args:
+    #     HYTALE_CREDENTIALS: ${HYTALE_CREDENTIALS}
+
+    container_name: hytale-server
+    restart: unless-stopped
+
+    # Interactive mode for initial authentication
+    stdin_open: true
+    tty: true
+
+    environment:
+      # =======================================================================
+      # Memory Configuration (minimum 4GB recommended by Hytale)
+      # =======================================================================
+      - MIN_MEMORY=${MIN_MEMORY:-4G}
+      - MAX_MEMORY=${MAX_MEMORY:-8G}
+
+      # =======================================================================
+      # Network Configuration (Hytale uses QUIC/UDP protocol)
+      # =======================================================================
+      - SERVER_PORT=${SERVER_PORT:-5520}
+      - SERVER_BIND=${SERVER_BIND:-0.0.0.0}
+
+      # =======================================================================
+      # Server Configuration
+      # =======================================================================
+      # Authentication mode: authenticated (production) or offline (testing)
+      - AUTH_MODE=${AUTH_MODE:-authenticated}
+
+      # Disable Sentry crash reporting (enable for plugin development)
+      - DISABLE_SENTRY=${DISABLE_SENTRY:-false}
+
+      # Use AOT cache for faster startup (JEP-514)
+      - USE_AOT_CACHE=${USE_AOT_CACHE:-true}
+
+      # =======================================================================
+      # Backup Configuration
+      # =======================================================================
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
+      - BACKUP_FREQUENCY=${BACKUP_FREQUENCY:-30}
+
+      # =======================================================================
+      # Token Authentication (alternative to /auth login device)
+      # Obtained via ./scripts/hytale-auth.sh
+      # =======================================================================
+      - OWNER_NAME=${OWNER_NAME:-}
+      - OWNER_UUID=${OWNER_UUID:-}
+      - SESSION_TOKEN=${SESSION_TOKEN:-}
+      - IDENTITY_TOKEN=${IDENTITY_TOKEN:-}
+
+      # =======================================================================
+      # Custom Server Arguments
+      # Example: EXTRA_ARGS="--allow-op --accept-early-plugins"
+      # =======================================================================
+      - EXTRA_ARGS=${EXTRA_ARGS:-}
+
+    ports:
+      # Hytale uses QUIC protocol over UDP only (not TCP)
+      - "${SERVER_PORT:-5520}:5520/udp"
+
+    volumes:
+      # =====================================================================
+      # Server data volume - contains ALL persistent data
+      # =====================================================================
+      # This single volume contains:
+      #   - universe/       : Worlds and player data
+      #   - mods/           : Installed mods
+      #   - logs/           : Server logs
+      #   - .cache/         : Optimized cache
+      #   - auth.enc        : Encrypted authentication (after /auth persistence Encrypted)
+      #   - config.json     : Server configuration
+      #   - permissions.json: Permissions
+      #   - whitelist.json  : Whitelisted players
+      #   - bans.json       : Banned players
+      - hytale-data:/server
+
+      # =====================================================================
+      # Machine-ID for encrypted authentication (/auth persistence Encrypted)
+      # =====================================================================
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 4G
+
+    # Graceful shutdown timeout
+    stop_grace_period: 60s
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "HytaleServer.jar"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+# Named volume for all server data
+volumes:
+  hytale-data:
+    name: hytale-data

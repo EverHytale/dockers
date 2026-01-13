@@ -1,0 +1,60 @@
+# =============================================================================
+# Docker Ignore File
+# =============================================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# GitHub
+.github
+
+# Documentation
+*.md
+!README.md
+LICENSE
+
+# IDE and editors
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local development
+.env
+.env.*
+!env.example
+
+# Credentials and secrets
+*.json
+!package.json
+.hytale-*
+
+# Test files
+test/
+tests/
+*.test.*
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+dist/
+build/
+*.tar
+*.gz
+
+# Docker
+docker-compose.override.yml

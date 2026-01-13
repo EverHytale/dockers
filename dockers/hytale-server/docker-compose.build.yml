@@ -1,0 +1,85 @@
+# =============================================================================
+# Hytale Dedicated Server - Docker Compose for Local Build
+# Repository: https://github.com/everhytale/dockers
+# =============================================================================
+# Use this file to build the image locally instead of using pre-built images.
+# =============================================================================
+# Usage:
+#   1. Create credentials file (or use hytale-auth.sh script):
+#      echo '{"access_token":"...", "refresh_token":"..."}' > .hytale-downloader-credentials.json
+#
+#   2. Build the image:
+#      docker compose -f docker-compose.build.yml build
+#
+#   3. Run the server:
+#      docker compose -f docker-compose.build.yml up -d
+#
+#   Note: Credentials are mounted as a secret and never appear in build logs
+# =============================================================================
+
+services:
+  hytale-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      secrets:
+        # Mount credentials securely (never appears in logs or layers)
+        - hytale_credentials
+      args:
+        # Build metadata only (no sensitive data)
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-}
+        VERSION: ${VERSION:-dev}
+
+    image: everhytale/hytale-server:local
+
+# Define secrets source
+secrets:
+  hytale_credentials:
+    file: .hytale-downloader-credentials.json
+    container_name: hytale-server
+    restart: unless-stopped
+
+    stdin_open: true
+    tty: true
+
+    environment:
+      - MIN_MEMORY=${MIN_MEMORY:-4G}
+      - MAX_MEMORY=${MAX_MEMORY:-8G}
+      - SERVER_PORT=${SERVER_PORT:-5520}
+      - SERVER_BIND=${SERVER_BIND:-0.0.0.0}
+      - AUTH_MODE=${AUTH_MODE:-authenticated}
+      - DISABLE_SENTRY=${DISABLE_SENTRY:-false}
+      - USE_AOT_CACHE=${USE_AOT_CACHE:-true}
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
+      - BACKUP_FREQUENCY=${BACKUP_FREQUENCY:-30}
+      - OWNER_NAME=${OWNER_NAME:-}
+      - OWNER_UUID=${OWNER_UUID:-}
+      - SESSION_TOKEN=${SESSION_TOKEN:-}
+      - IDENTITY_TOKEN=${IDENTITY_TOKEN:-}
+
+      # Custom server arguments
+      - EXTRA_ARGS=${EXTRA_ARGS:-}
+
+    ports:
+      - "${SERVER_PORT:-5520}:5520/udp"
+
+    volumes:
+      # All server data in single volume
+      - hytale-data:/server
+      # Machine-ID for encrypted auth
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
+
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 4G
+
+    stop_grace_period: 60s
+
+volumes:
+  hytale-data:
+    name: hytale-data

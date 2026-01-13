@@ -1,0 +1,300 @@
+# =============================================================================
+# GitHub Actions Workflow - Hytale Server Docker Image
+# Repository: everhytale/dockers
+# Image: everhytale/hytale-server (Docker Hub)
+# =============================================================================
+# Multi-architecture build: amd64, arm64
+#
+# Tag Strategy:
+#   - v1.0.0          → latest, 1.0.0, 1.0, 1
+#   - v1.0.0-rc.1     → rc, 1.0.0-rc.1
+#   - v1.0.0-dev.1    → dev, 1.0.0-dev.1
+#   - main branch     → edge
+# =============================================================================
+
+name: Hytale Server - Build & Push
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+    paths:
+      - 'dockers/hytale-server/**'
+      - '.github/workflows/hytale-server.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'dockers/hytale-server/**'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if no changes'
+        required: false
+        default: 'false'
+      update_description_only:
+        description: 'Only update Docker Hub description (skip build)'
+        required: false
+        default: 'false'
+
+env:
+  # Docker Hub image
+  DOCKERHUB_IMAGE: everhytale/hytale-server
+  # GitHub Container Registry image (backup)
+  GHCR_IMAGE: ghcr.io/everhytale/hytale-server
+  # Build context
+  CONTEXT: ./dockers/hytale-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Use the 'prod' environment to access secrets
+    environment: prod
+    # Skip build if only updating description
+    if: github.event.inputs.update_description_only != 'true'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ---------------------------------------------------------------------
+      # Checkout and Setup
+      # ---------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      # ---------------------------------------------------------------------
+      # Authentication
+      # ---------------------------------------------------------------------
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------------
+      # Determine version type and tags
+      # ---------------------------------------------------------------------
+      - name: Determine version type
+        id: version
+        run: |
+          REF="${GITHUB_REF}"
+
+          if [[ "$REF" == refs/tags/v* ]]; then
+            VERSION="${REF#refs/tags/v}"
+
+            if [[ "$VERSION" == *"-rc"* ]]; then
+              echo "type=rc" >> $GITHUB_OUTPUT
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+            elif [[ "$VERSION" == *"-dev"* ]] || [[ "$VERSION" == *"-alpha"* ]] || [[ "$VERSION" == *"-beta"* ]]; then
+              echo "type=dev" >> $GITHUB_OUTPUT
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "type=release" >> $GITHUB_OUTPUT
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "type=edge" >> $GITHUB_OUTPUT
+            echo "version=edge" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Detected type: $(cat $GITHUB_OUTPUT | grep type | cut -d= -f2)"
+          echo "Detected version: $(cat $GITHUB_OUTPUT | grep version | cut -d= -f2)"
+
+      # ---------------------------------------------------------------------
+      # Metadata and Tags
+      # ---------------------------------------------------------------------
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            # Edge tag for main branch
+            type=edge,branch=main
+            type=edge,branch=master
+
+            # Semantic versioning for releases (v1.0.0 → latest, 1.0.0, 1.0, 1)
+            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.version.outputs.type == 'release' }}
+            type=semver,pattern={{major}},enable=${{ steps.version.outputs.type == 'release' && !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.type == 'release' }}
+
+            # RC tags (v1.0.0-rc.1 → rc, 1.0.0-rc.1)
+            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'rc' }}
+            type=raw,value=rc,enable=${{ steps.version.outputs.type == 'rc' }}
+
+            # Dev tags (v1.0.0-dev.1 → dev, 1.0.0-dev.1)
+            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'dev' }}
+            type=raw,value=dev,enable=${{ steps.version.outputs.type == 'dev' }}
+
+            # SHA for all builds
+            type=sha,prefix=sha-
+
+            # PR number for pull requests
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=Hytale Dedicated Server
+            org.opencontainers.image.description=Optimized Hytale dedicated server Docker image with Java 25
+            org.opencontainers.image.vendor=EverHytale
+            org.opencontainers.image.url=https://github.com/everhytale/dockers
+            org.opencontainers.image.source=https://github.com/everhytale/dockers
+            org.opencontainers.image.documentation=https://github.com/everhytale/dockers/tree/main/dockers/hytale-server
+
+      # ---------------------------------------------------------------------
+      # Build and Push
+      # ---------------------------------------------------------------------
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.version.outputs.version }}
+          secrets: |
+            hytale_credentials=${{ secrets.HYTALE_CREDENTIALS }}
+          cache-from: type=gha,scope=hytale-server
+          cache-to: type=gha,mode=max,scope=hytale-server
+          provenance: true
+          sbom: true
+
+      # ---------------------------------------------------------------------
+      # Summary
+      # ---------------------------------------------------------------------
+      - name: Generate build summary
+        run: |
+          echo "## 🐳 Hytale Server - Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version Type** | \`${{ steps.version.outputs.type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version** | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platforms** | linux/amd64, linux/arm64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Hub:** \`${{ env.DOCKERHUB_IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**GitHub Container Registry:** \`${{ env.GHCR_IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.type == 'release' && 'latest' || steps.version.outputs.type }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # -------------------------------------------------------------------------
+  # Security Scan (only for releases and RC)
+  # -------------------------------------------------------------------------
+  security-scan:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && (contains(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine scan tag
+        id: scan-tag
+        run: |
+          REF="${GITHUB_REF}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            VERSION="${REF#refs/tags/v}"
+            if [[ "$VERSION" == *"-rc"* ]]; then
+              echo "tag=rc" >> $GITHUB_OUTPUT
+            elif [[ "$VERSION" == *"-dev"* ]]; then
+              echo "tag=dev" >> $GITHUB_OUTPUT
+            else
+              echo "tag=latest" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "tag=edge" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.DOCKERHUB_IMAGE }}:${{ steps.scan-tag.outputs.tag }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # -------------------------------------------------------------------------
+  # Update Docker Hub Description (releases or manual trigger)
+  # -------------------------------------------------------------------------
+  update-description:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: prod
+    # Run after build, or independently if update_description_only is true
+    if: |
+      always() && (
+        github.event.inputs.update_description_only == 'true' ||
+        (github.event_name == 'workflow_dispatch' && needs.build.result == 'success') ||
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-'))
+      )
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: everhytale/hytale-server
+          readme-filepath: ./dockers/hytale-server/README.md
+          short-description: "Optimized Hytale dedicated server with Java 25 and multi-arch support"

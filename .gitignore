@@ -1,0 +1,48 @@
+# =============================================================================
+# Git Ignore File
+# =============================================================================
+
+# Environment and credentials
+.env
+.env.*
+!env.example
+*.credentials.json
+.hytale-*
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-*
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test data
+test/
+hytale/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Build artifacts
+dist/
+build/
+
+# Docker
+docker-compose.override.yml
