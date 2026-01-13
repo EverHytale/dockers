@@ -59,7 +59,9 @@ services:
       # Backup Configuration
       # =======================================================================
       - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
+      - BACKUP_DIR=${BACKUP_DIR:-/server/backups}
       - BACKUP_FREQUENCY=${BACKUP_FREQUENCY:-30}
+      - BACKUP_MAX_COUNT=${BACKUP_MAX_COUNT:-5}
 
       # =======================================================================
       # Token Authentication (alternative to /auth login device)

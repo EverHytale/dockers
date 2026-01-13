@@ -264,6 +264,11 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
+          # Skip scanning large JAR files that cause stream errors
+          skip-files: 'opt/hytale-server/HytaleServer.jar,opt/hytale-server/Assets.zip'
+          # Scan only OS packages and language-specific packages (not custom JARs)
+          scanners: 'vuln,secret'
+          timeout: '30m'
 
       - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v4

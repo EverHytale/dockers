@@ -99,8 +99,10 @@ docker run -d \
 | `AUTH_MODE` | `authenticated` | Authentication mode (`authenticated` or `offline`) |
 | `DISABLE_SENTRY` | `false` | Disable crash reporting (for development) |
 | `USE_AOT_CACHE` | `true` | Use AOT cache for faster startup |
-| `BACKUP_ENABLED` | `false` | Enable automatic backups |
-| `BACKUP_FREQUENCY` | `30` | Backup interval in minutes |
+| `BACKUP_ENABLED` | `false` | Enable automatic backups (`--backup`) |
+| `BACKUP_DIR` | `/server/backups` | Backup directory path (`--backup-dir`) |
+| `BACKUP_FREQUENCY` | `30` | Backup interval in minutes (`--backup-frequency`) |
+| `BACKUP_MAX_COUNT` | `5` | Maximum number of backups to keep (`--backup-max-count`) |
 
 ### Token Authentication
 
@@ -369,7 +371,7 @@ Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTIN
 ## 📚 Resources
 
 - [Hytale Official Documentation](https://hytale.com)
-- [Hytale Server Manual](https://support.hytale.com/hc/en-us/articles/hytale-server-manual)
+- [Hytale Server Manual](https://support.hytale.com/hc/en-us/articles/45326769420827-Hytale-Server-Manual)
 - [Eclipse Temurin (Java)](https://adoptium.net/)
 - [Docker Documentation](https://docs.docker.com/)
 

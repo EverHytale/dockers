@@ -40,7 +40,9 @@ AUTH_MODE="${AUTH_MODE:-authenticated}"
 DISABLE_SENTRY="${DISABLE_SENTRY:-false}"
 USE_AOT_CACHE="${USE_AOT_CACHE:-true}"
 BACKUP_ENABLED="${BACKUP_ENABLED:-false}"
+BACKUP_DIR="${BACKUP_DIR:-/server/backups}"
 BACKUP_FREQUENCY="${BACKUP_FREQUENCY:-30}"
+BACKUP_MAX_COUNT="${BACKUP_MAX_COUNT:-5}"
 
 # Token authentication (alternative to /auth login device)
 OWNER_NAME="${OWNER_NAME:-}"
@@ -139,8 +141,11 @@ if [ "${DISABLE_SENTRY}" = "true" ]; then
 fi
 
 if [ "${BACKUP_ENABLED}" = "true" ]; then
-    SERVER_ARGS="${SERVER_ARGS} --backup --backup-frequency ${BACKUP_FREQUENCY}"
-    echo -e "${GREEN}✓ Auto backup enabled (every ${BACKUP_FREQUENCY} minutes)${NC}"
+    SERVER_ARGS="${SERVER_ARGS} --backup"
+    SERVER_ARGS="${SERVER_ARGS} --backup-dir ${BACKUP_DIR}"
+    SERVER_ARGS="${SERVER_ARGS} --backup-frequency ${BACKUP_FREQUENCY}"
+    SERVER_ARGS="${SERVER_ARGS} --backup-max-count ${BACKUP_MAX_COUNT}"
+    echo -e "${GREEN}✓ Auto backup enabled (every ${BACKUP_FREQUENCY} min, max ${BACKUP_MAX_COUNT} backups, dir: ${BACKUP_DIR})${NC}"
 fi
 
 # Token authentication arguments
