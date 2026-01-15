@@ -5,15 +5,15 @@
 # =============================================================================
 # Multi-architecture build: amd64, arm64
 #
-# Tag Strategy (SemVer with build metadata):
-#   - v1.0.0          → 1.0.0+{HYTALE_VERSION}, {HYTALE_VERSION}, latest
-#   - v1.0.0-rc.1     → 1.0.0-rc.1+{HYTALE_VERSION}, rc
-#   - v1.0.0-dev.1    → 1.0.0-dev.1+{HYTALE_VERSION}, dev
-#   - main branch     → edge+{HYTALE_VERSION}
+# Tag Strategy (SemVer with Hytale version):
+#   - v1.0.0          → 1.0.0_{HYTALE_VERSION}, {HYTALE_VERSION}, latest
+#   - v1.0.0-rc.1     → 1.0.0-rc.1_{HYTALE_VERSION}, rc
+#   - v1.0.0-dev.1    → 1.0.0-dev.1_{HYTALE_VERSION}, dev
+#   - main branch     → edge_{HYTALE_VERSION}
 #   - schedule        → auto-build on new Hytale version (every 12h check)
 #
 # Example tags for Hytale version 2026.01.15-c04fdfe10:
-#   - 1.0.0+2026.01.15-c04fdfe10
+#   - 1.0.0_2026.01.15-c04fdfe10
 #   - 2026.01.15-c04fdfe10 (latest image for this Hytale version)
 #   - latest
 # =============================================================================
@@ -85,12 +85,13 @@ jobs:
         env:
           HYTALE_CREDENTIALS: ${{ secrets.HYTALE_CREDENTIALS }}
         run: |
-          printenv HYTALE_CREDENTIALS > hytale-downloader/.hytale-downloader-credentials.json
+          printenv HYTALE_CREDENTIALS > .hytale-credentials.json
 
       - name: Get Hytale version
         id: hytale-version
         timeout-minutes: 1
         run: |
+          cp .hytale-credentials.json hytale-downloader/.hytale-downloader-credentials.json
           ./hytale-downloader/hytale-downloader-linux-amd64 -print-version
           VERSION=$(timeout 30s ./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
 
@@ -293,8 +294,8 @@ jobs:
           HYTALE_VERSION="${{ steps.version.outputs.hytale_version }}"
           VERSION_TYPE="${{ steps.version.outputs.type }}"
 
-          # Build the full version tag: IMAGE_VERSION+HYTALE_VERSION
-          FULL_VERSION="${IMAGE_VERSION}+${HYTALE_VERSION}"
+          # Build the full version tag: IMAGE_VERSION_HYTALE_VERSION
+          FULL_VERSION="${IMAGE_VERSION}_${HYTALE_VERSION}"
 
           # Start building tags list
           TAGS=""
@@ -403,7 +404,7 @@ jobs:
           echo "| **Version Type** | \`${{ steps.version.outputs.type }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image Version** | \`${{ steps.version.outputs.image_version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Hytale Version** | \`${{ steps.version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Full Tag** | \`${{ steps.version.outputs.image_version }}+${{ steps.version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Tag** | \`${{ steps.version.outputs.image_version }}_${{ steps.version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Platforms** | linux/amd64, linux/arm64 |" >> $GITHUB_STEP_SUMMARY
           echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
@@ -430,7 +431,7 @@ jobs:
           echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.hytale_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Specific image + Hytale version" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.image_version }}+${{ steps.version.outputs.hytale_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.image_version }}_${{ steps.version.outputs.hytale_version }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   # ===========================================================================
