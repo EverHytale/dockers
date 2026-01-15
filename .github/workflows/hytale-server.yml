@@ -81,10 +81,27 @@ jobs:
           unzip -q hytale-downloader.zip -d hytale-downloader
           chmod +x hytale-downloader/hytale-downloader-linux-amd64
 
+      - name: Create credentials file
+        env:
+          HYTALE_CREDENTIALS: ${{ secrets.HYTALE_CREDENTIALS }}
+        run: |
+          printenv HYTALE_CREDENTIALS > hytale-downloader/.hytale-downloader-credentials.json
+
       - name: Get Hytale version
         id: hytale-version
+        timeout-minutes: 1
         run: |
-          VERSION=$(./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
+          VERSION=$(timeout 30s ./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
+
+          # Cleanup credentials
+          rm -f hytale-downloader/.hytale-downloader-credentials.json
+
+          # Validate version format (expected: YYYY.MM.DD-xxxxxxxx)
+          if [[ ! "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]+$ ]]; then
+            echo "::error::Invalid version format: '$VERSION'. Expected format: YYYY.MM.DD-xxxxxxxx"
+            exit 1
+          fi
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Hytale version: $VERSION"
 
