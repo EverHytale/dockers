@@ -5,16 +5,26 @@
 # =============================================================================
 # Multi-architecture build: amd64, arm64
 #
-# Tag Strategy:
-#   - v1.0.0          → latest, 1.0.0, 1.0, 1
-#   - v1.0.0-rc.1     → rc, 1.0.0-rc.1
-#   - v1.0.0-dev.1    → dev, 1.0.0-dev.1
-#   - main branch     → edge
+# Tag Strategy (SemVer with build metadata):
+#   - v1.0.0          → 1.0.0+{HYTALE_VERSION}, {HYTALE_VERSION}, latest
+#   - v1.0.0-rc.1     → 1.0.0-rc.1+{HYTALE_VERSION}, rc
+#   - v1.0.0-dev.1    → 1.0.0-dev.1+{HYTALE_VERSION}, dev
+#   - main branch     → edge+{HYTALE_VERSION}
+#   - schedule        → auto-build on new Hytale version (every 12h check)
+#
+# Example tags for Hytale version 2026.01.15-c04fdfe10:
+#   - 1.0.0+2026.01.15-c04fdfe10
+#   - 2026.01.15-c04fdfe10 (latest image for this Hytale version)
+#   - latest
 # =============================================================================
 
 name: Hytale Server - Build & Push
 
 on:
+  # Scheduled check for new Hytale versions (every 12 hours)
+  schedule:
+    - cron: '0 */12 * * *'
+
   push:
     branches:
       - main
@@ -24,16 +34,18 @@ on:
     paths:
       - 'dockers/hytale-server/**'
       - '.github/workflows/hytale-server.yml'
+
   pull_request:
     branches:
       - main
       - master
     paths:
       - 'dockers/hytale-server/**'
+
   workflow_dispatch:
     inputs:
       force_rebuild:
-        description: 'Force rebuild even if no changes'
+        description: 'Force rebuild even if no new Hytale version'
         required: false
         default: 'false'
       update_description_only:
@@ -50,20 +62,116 @@ env:
   CONTEXT: ./dockers/hytale-server
 
 jobs:
-  build:
+  # ===========================================================================
+  # Job 1: Check for new Hytale version
+  # ===========================================================================
+  check-version:
     runs-on: ubuntu-latest
-    # Use the 'prod' environment to access secrets
-    environment: prod
-    # Skip build if only updating description
+    # Skip for PRs and description-only updates
     if: github.event.inputs.update_description_only != 'true'
+    outputs:
+      hytale_version: ${{ steps.hytale-version.outputs.version }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      current_version: ${{ steps.current.outputs.version }}
+
+    steps:
+      - name: Download Hytale downloader
+        run: |
+          curl -fsSL https://downloader.hytale.com/hytale-downloader.zip -o hytale-downloader.zip
+          unzip -q hytale-downloader.zip -d hytale-downloader
+          chmod +x hytale-downloader/hytale-downloader-linux-amd64
+
+      - name: Get Hytale version
+        id: hytale-version
+        run: |
+          VERSION=$(./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Hytale version: $VERSION"
+
+      - name: Get current deployed version
+        id: current
+        run: |
+          # Try to get the current version from Docker Hub labels
+          CURRENT_VERSION=""
+
+          # Use Docker Hub API to get the latest image manifest
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ env.DOCKERHUB_IMAGE }}:pull" | jq -r .token)
+
+          if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
+            # Get manifest for latest tag
+            MANIFEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "https://registry-1.docker.io/v2/${{ env.DOCKERHUB_IMAGE }}/manifests/latest" 2>/dev/null || echo "{}")
+
+            # Get config digest
+            CONFIG_DIGEST=$(echo "$MANIFEST" | jq -r '.config.digest // empty')
+
+            if [ -n "$CONFIG_DIGEST" ]; then
+              # Get config blob which contains labels
+              CONFIG=$(curl -s -H "Authorization: Bearer $TOKEN" \
+                "https://registry-1.docker.io/v2/${{ env.DOCKERHUB_IMAGE }}/blobs/$CONFIG_DIGEST" 2>/dev/null || echo "{}")
+
+              CURRENT_VERSION=$(echo "$CONFIG" | jq -r '.config.Labels["hytale.version"] // empty')
+            fi
+          fi
+
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current deployed Hytale version: ${CURRENT_VERSION:-none}"
+
+      - name: Check if build is needed
+        id: check
+        run: |
+          HYTALE_VERSION="${{ steps.hytale-version.outputs.version }}"
+          CURRENT_VERSION="${{ steps.current.outputs.version }}"
+          FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+          EVENT_NAME="${{ github.event_name }}"
+
+          # Always build for:
+          # - Tag pushes (release)
+          # - Push to main with path changes
+          # - Force rebuild
+          # - New Hytale version detected
+          # - Pull requests (for testing)
+
+          if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: tag push"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: push to branch with path changes"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: pull request"
+          elif [[ "$FORCE_REBUILD" == "true" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: force rebuild requested"
+          elif [[ -z "$CURRENT_VERSION" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: no current version found"
+          elif [[ "$HYTALE_VERSION" != "$CURRENT_VERSION" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Build needed: new Hytale version ($CURRENT_VERSION → $HYTALE_VERSION)"
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "No build needed: Hytale version unchanged ($HYTALE_VERSION)"
+          fi
+
+  # ===========================================================================
+  # Job 2: Build and Push Docker Image
+  # ===========================================================================
+  build:
+    needs: check-version
+    runs-on: ubuntu-latest
+    environment: prod
+    if: needs.check-version.outputs.should_build == 'true'
     permissions:
       contents: read
       packages: write
 
     steps:
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       # Checkout and Setup
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -75,9 +183,43 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
 
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # Download Hytale Game Files
+      # -----------------------------------------------------------------------
+      - name: Create credentials file
+        env:
+          HYTALE_CREDENTIALS: ${{ secrets.HYTALE_CREDENTIALS }}
+        run: |
+          printenv HYTALE_CREDENTIALS > .hytale-credentials.json
+
+      - name: Download Hytale game files
+        run: |
+          # Download the downloader
+          curl -fsSL https://downloader.hytale.com/hytale-downloader.zip -o hytale-downloader.zip
+          unzip -q hytale-downloader.zip -d hytale-downloader
+
+          # Setup credentials
+          cp .hytale-credentials.json hytale-downloader/.hytale-downloader-credentials.json
+          chmod +x hytale-downloader/hytale-downloader-linux-amd64
+
+          # Download game files
+          cd hytale-downloader
+          ./hytale-downloader-linux-amd64 -download-path ../game.zip
+
+          # Extract game files
+          cd ..
+          mkdir -p game-files
+          unzip -q game.zip -d game-files
+
+          # Cleanup sensitive files
+          rm -f .hytale-credentials.json hytale-downloader/.hytale-downloader-credentials.json
+
+          echo "Game files downloaded and extracted to game-files/"
+          ls -la game-files/
+
+      # -----------------------------------------------------------------------
       # Authentication
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -93,82 +235,113 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---------------------------------------------------------------------
-      # Determine version type and tags
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # Determine version type and generate tags
+      # -----------------------------------------------------------------------
       - name: Determine version type
         id: version
         run: |
           REF="${GITHUB_REF}"
+          HYTALE_VERSION="${{ needs.check-version.outputs.hytale_version }}"
 
           if [[ "$REF" == refs/tags/v* ]]; then
-            VERSION="${REF#refs/tags/v}"
+            IMAGE_VERSION="${REF#refs/tags/v}"
 
-            if [[ "$VERSION" == *"-rc"* ]]; then
+            if [[ "$IMAGE_VERSION" == *"-rc"* ]]; then
               echo "type=rc" >> $GITHUB_OUTPUT
-              echo "version=$VERSION" >> $GITHUB_OUTPUT
-            elif [[ "$VERSION" == *"-dev"* ]] || [[ "$VERSION" == *"-alpha"* ]] || [[ "$VERSION" == *"-beta"* ]]; then
+            elif [[ "$IMAGE_VERSION" == *"-dev"* ]] || [[ "$IMAGE_VERSION" == *"-alpha"* ]] || [[ "$IMAGE_VERSION" == *"-beta"* ]]; then
               echo "type=dev" >> $GITHUB_OUTPUT
-              echo "version=$VERSION" >> $GITHUB_OUTPUT
             else
               echo "type=release" >> $GITHUB_OUTPUT
-              echo "version=$VERSION" >> $GITHUB_OUTPUT
             fi
+            echo "image_version=$IMAGE_VERSION" >> $GITHUB_OUTPUT
           else
             echo "type=edge" >> $GITHUB_OUTPUT
-            echo "version=edge" >> $GITHUB_OUTPUT
+            echo "image_version=edge" >> $GITHUB_OUTPUT
           fi
 
-          echo "Detected type: $(cat $GITHUB_OUTPUT | grep type | cut -d= -f2)"
-          echo "Detected version: $(cat $GITHUB_OUTPUT | grep version | cut -d= -f2)"
+          echo "hytale_version=$HYTALE_VERSION" >> $GITHUB_OUTPUT
 
-      # ---------------------------------------------------------------------
-      # Metadata and Tags
-      # ---------------------------------------------------------------------
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.DOCKERHUB_IMAGE }}
-            ${{ env.GHCR_IMAGE }}
-          flavor: |
-            latest=false
-          tags: |
-            # Edge tag for main branch
-            type=edge,branch=main
-            type=edge,branch=master
+          echo "Detected type: $(grep type $GITHUB_OUTPUT | tail -1 | cut -d= -f2)"
+          echo "Image version: $(grep image_version $GITHUB_OUTPUT | tail -1 | cut -d= -f2)"
+          echo "Hytale version: $HYTALE_VERSION"
 
-            # Semantic versioning for releases (v1.0.0 → latest, 1.0.0, 1.0, 1)
-            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'release' }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.version.outputs.type == 'release' }}
-            type=semver,pattern={{major}},enable=${{ steps.version.outputs.type == 'release' && !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=raw,value=latest,enable=${{ steps.version.outputs.type == 'release' }}
+      - name: Generate Docker tags
+        id: tags
+        run: |
+          DOCKERHUB_IMAGE="${{ env.DOCKERHUB_IMAGE }}"
+          GHCR_IMAGE="${{ env.GHCR_IMAGE }}"
+          IMAGE_VERSION="${{ steps.version.outputs.image_version }}"
+          HYTALE_VERSION="${{ steps.version.outputs.hytale_version }}"
+          VERSION_TYPE="${{ steps.version.outputs.type }}"
 
-            # RC tags (v1.0.0-rc.1 → rc, 1.0.0-rc.1)
-            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'rc' }}
-            type=raw,value=rc,enable=${{ steps.version.outputs.type == 'rc' }}
+          # Build the full version tag: IMAGE_VERSION+HYTALE_VERSION
+          FULL_VERSION="${IMAGE_VERSION}+${HYTALE_VERSION}"
 
-            # Dev tags (v1.0.0-dev.1 → dev, 1.0.0-dev.1)
-            type=semver,pattern={{version}},enable=${{ steps.version.outputs.type == 'dev' }}
-            type=raw,value=dev,enable=${{ steps.version.outputs.type == 'dev' }}
+          # Start building tags list
+          TAGS=""
 
-            # SHA for all builds
-            type=sha,prefix=sha-
+          # Full version tag (always)
+          TAGS="${DOCKERHUB_IMAGE}:${FULL_VERSION}"
+          TAGS="${TAGS},${GHCR_IMAGE}:${FULL_VERSION}"
 
-            # PR number for pull requests
-            type=ref,event=pr
-          labels: |
-            org.opencontainers.image.title=Hytale Dedicated Server
-            org.opencontainers.image.description=Optimized Hytale dedicated server Docker image with Java 25
-            org.opencontainers.image.vendor=EverHytale
-            org.opencontainers.image.url=https://github.com/everhytale/dockers
-            org.opencontainers.image.source=https://github.com/everhytale/dockers
-            org.opencontainers.image.documentation=https://github.com/everhytale/dockers/tree/main/dockers/hytale-server
+          # Hytale version tag (latest image for this Hytale version) - only for releases
+          if [[ "$VERSION_TYPE" == "release" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:${HYTALE_VERSION}"
+            TAGS="${TAGS},${GHCR_IMAGE}:${HYTALE_VERSION}"
 
-      # ---------------------------------------------------------------------
+            # Latest tag
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:latest"
+            TAGS="${TAGS},${GHCR_IMAGE}:latest"
+
+            # SemVer tags (major.minor, major)
+            MAJOR=$(echo "$IMAGE_VERSION" | cut -d. -f1)
+            MINOR=$(echo "$IMAGE_VERSION" | cut -d. -f2)
+            if [[ "$MAJOR" != "0" ]]; then
+              TAGS="${TAGS},${DOCKERHUB_IMAGE}:${MAJOR}"
+              TAGS="${TAGS},${GHCR_IMAGE}:${MAJOR}"
+            fi
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:${MAJOR}.${MINOR}"
+            TAGS="${TAGS},${GHCR_IMAGE}:${MAJOR}.${MINOR}"
+          fi
+
+          # RC tag
+          if [[ "$VERSION_TYPE" == "rc" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:rc"
+            TAGS="${TAGS},${GHCR_IMAGE}:rc"
+          fi
+
+          # Dev tag
+          if [[ "$VERSION_TYPE" == "dev" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:dev"
+            TAGS="${TAGS},${GHCR_IMAGE}:dev"
+          fi
+
+          # Edge tag
+          if [[ "$VERSION_TYPE" == "edge" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:edge"
+            TAGS="${TAGS},${GHCR_IMAGE}:edge"
+          fi
+
+          # SHA tag (always)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TAGS="${TAGS},${DOCKERHUB_IMAGE}:sha-${SHORT_SHA}"
+          TAGS="${TAGS},${GHCR_IMAGE}:sha-${SHORT_SHA}"
+
+          # PR tag
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:pr-${PR_NUMBER}"
+            TAGS="${TAGS},${GHCR_IMAGE}:pr-${PR_NUMBER}"
+          fi
+
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "Generated tags:"
+          echo "$TAGS" | tr ',' '\n'
+
+      # -----------------------------------------------------------------------
       # Build and Push
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v5
@@ -177,22 +350,30 @@ jobs:
           file: ${{ env.CONTEXT }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}
             VCS_REF=${{ github.sha }}
-            VERSION=${{ steps.version.outputs.version }}
-          secrets: |
-            hytale_credentials=${{ secrets.HYTALE_CREDENTIALS }}
+            VERSION=${{ steps.version.outputs.image_version }}
+            HYTALE_VERSION=${{ steps.version.outputs.hytale_version }}
+          build-contexts: |
+            game=./game-files
           cache-from: type=gha,scope=hytale-server
           cache-to: type=gha,mode=max,scope=hytale-server
           provenance: true
           sbom: true
+          labels: |
+            org.opencontainers.image.title=Hytale Dedicated Server
+            org.opencontainers.image.description=Optimized Hytale dedicated server Docker image with Java 25
+            org.opencontainers.image.vendor=EverHytale
+            org.opencontainers.image.url=https://github.com/everhytale/dockers
+            org.opencontainers.image.source=https://github.com/everhytale/dockers
+            org.opencontainers.image.documentation=https://github.com/everhytale/dockers/tree/main/dockers/hytale-server
+            hytale.version=${{ steps.version.outputs.hytale_version }}
 
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       # Summary
-      # ---------------------------------------------------------------------
+      # -----------------------------------------------------------------------
       - name: Generate build summary
         run: |
           echo "## 🐳 Hytale Server - Docker Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -202,7 +383,9 @@ jobs:
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Version Type** | \`${{ steps.version.outputs.type }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Version** | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Version** | \`${{ steps.version.outputs.image_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Hytale Version** | \`${{ steps.version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Tag** | \`${{ steps.version.outputs.image_version }}+${{ steps.version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Platforms** | linux/amd64, linux/arm64 |" >> $GITHUB_STEP_SUMMARY
           echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
@@ -216,22 +399,32 @@ jobs:
           echo "### Tags" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Usage" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.type == 'release' && 'latest' || steps.version.outputs.type }}" >> $GITHUB_STEP_SUMMARY
+          echo "# Latest stable release" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Specific Hytale version (latest image)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.hytale_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Specific image + Hytale version" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.image_version }}+${{ steps.version.outputs.hytale_version }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-  # -------------------------------------------------------------------------
-  # Security Scan (only for releases and RC)
-  # -------------------------------------------------------------------------
+  # ===========================================================================
+  # Job 3: Security Scan (only for releases and RC)
+  # ===========================================================================
   security-scan:
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (contains(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    if: |
+      needs.build.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (contains(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     permissions:
       contents: read
       security-events: write
@@ -264,9 +457,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          # Skip scanning large JAR files that cause stream errors
           skip-files: 'opt/hytale-server/HytaleServer.jar,opt/hytale-server/Assets.zip'
-          # Scan only OS packages and language-specific packages (not custom JARs)
           scanners: 'vuln,secret'
           timeout: '30m'
 
@@ -276,14 +467,13 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-  # -------------------------------------------------------------------------
-  # Update Docker Hub Description (releases or manual trigger)
-  # -------------------------------------------------------------------------
+  # ===========================================================================
+  # Job 4: Update Docker Hub Description (releases or manual trigger)
+  # ===========================================================================
   update-description:
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     environment: prod
-    # Run after build, or independently if update_description_only is true
     if: |
       always() && (
         github.event.inputs.update_description_only == 'true' ||
@@ -303,3 +493,25 @@ jobs:
           repository: everhytale/hytale-server
           readme-filepath: ./dockers/hytale-server/README.md
           short-description: "Optimized Hytale dedicated server with Java 25 and multi-arch support"
+
+  # ===========================================================================
+  # Job 5: Skip notification (for scheduled runs with no new version)
+  # ===========================================================================
+  skip-notification:
+    needs: check-version
+    runs-on: ubuntu-latest
+    if: needs.check-version.outputs.should_build == 'false' && github.event_name == 'schedule'
+
+    steps:
+      - name: Log skip reason
+        run: |
+          echo "## ⏭️ Build Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No new Hytale version detected." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Current Version** | \`${{ needs.check-version.outputs.current_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Latest Version** | \`${{ needs.check-version.outputs.hytale_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The scheduled check found no updates. Next check in 12 hours." >> $GITHUB_STEP_SUMMARY

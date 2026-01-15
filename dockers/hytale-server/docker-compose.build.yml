@@ -4,9 +4,14 @@
 # =============================================================================
 # Use this file to build the image locally instead of using pre-built images.
 # =============================================================================
-# Usage:
+#
+# Prerequisites:
 #   1. Create credentials file (or use hytale-auth.sh script):
 #      echo '{"access_token":"...", "refresh_token":"..."}' > .hytale-downloader-credentials.json
+#
+# Usage:
+#   1. Download game files first:
+#      ./scripts/download-game.sh
 #
 #   2. Build the image:
 #      docker compose -f docker-compose.build.yml build
@@ -14,7 +19,9 @@
 #   3. Run the server:
 #      docker compose -f docker-compose.build.yml up -d
 #
-#   Note: Credentials are mounted as a secret and never appear in build logs
+# Alternative (one-liner):
+#   ./scripts/download-game.sh && docker compose -f docker-compose.build.yml up -d --build
+#
 # =============================================================================
 
 services:
@@ -22,21 +29,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      secrets:
-        # Mount credentials securely (never appears in logs or layers)
-        - hytale_credentials
+      # Game files downloaded by scripts/download-game.sh
+      additional_contexts:
+        game: ./game-files
       args:
-        # Build metadata only (no sensitive data)
         BUILD_DATE: ${BUILD_DATE:-}
-        VCS_REF: ${VCS_REF:-}
-        VERSION: ${VERSION:-dev}
+        VCS_REF: ${VCS_REF:-local}
+        VERSION: ${VERSION:-local}
+        HYTALE_VERSION: ${HYTALE_VERSION:-unknown}
 
     image: everhytale/hytale-server:local
-
-# Define secrets source
-secrets:
-  hytale_credentials:
-    file: .hytale-downloader-credentials.json
     container_name: hytale-server
     restart: unless-stopped
 
@@ -57,7 +59,6 @@ secrets:
       - OWNER_UUID=${OWNER_UUID:-}
       - SESSION_TOKEN=${SESSION_TOKEN:-}
       - IDENTITY_TOKEN=${IDENTITY_TOKEN:-}
-
       # Custom server arguments
       - EXTRA_ARGS=${EXTRA_ARGS:-}
 
