@@ -58,3 +58,11 @@ build/
 
 # Docker
 docker-compose.override.yml
+
+# Hytale game files (provided via build-context, not copied from context)
+game-files/
+game.zip
+.hytale-downloader/
+
+# Scripts (not needed in image)
+scripts/

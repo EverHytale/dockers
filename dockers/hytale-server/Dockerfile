@@ -9,48 +9,17 @@
 # Directory structure:
 #   /opt/hytale-server/  - Game files (read-only, from image)
 #   /server/             - Server data (persistent, mounted volume)
+#
+# Build:
+#   Game files are provided via build-context from CI/CD pipeline.
+#   For local builds, see docker-compose.build.yml
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# STAGE 1: Download Hytale Server Files (AMD64 only - downloader limitation)
-# -----------------------------------------------------------------------------
-FROM --platform=linux/amd64 debian:bookworm-slim AS downloader
+FROM eclipse-temurin:25-jre-noble
 
-LABEL stage="downloader"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    unzip \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-WORKDIR /download
-
-# Download the Hytale downloader CLI
-RUN curl -fsSL https://downloader.hytale.com/hytale-downloader.zip -o hytale-downloader.zip \
-    && unzip -q hytale-downloader.zip -d hytale-downloader \
-    && rm hytale-downloader.zip
-
-WORKDIR /download/hytale-downloader
-
-# Download game files using mounted secret (credentials never appear in logs/layers)
-# The secret is mounted temporarily, copied to a writable location, used, then deleted
-RUN --mount=type=secret,id=hytale_credentials,required=true \
-    cp /run/secrets/hytale_credentials .hytale-downloader-credentials.json \
-    && chmod +x ./hytale-downloader-linux-amd64 \
-    && ./hytale-downloader-linux-amd64 -download-path /download/game.zip \
-    && rm -f .hytale-downloader-credentials.json \
-    && mkdir -p /game \
-    && unzip -q /download/game.zip -d /game \
-    && rm /download/game.zip
-
-# -----------------------------------------------------------------------------
-# STAGE 2: Hytale Server Runtime (Multi-architecture: amd64, arm64)
-# -----------------------------------------------------------------------------
-FROM eclipse-temurin:25-jre-noble AS runtime
-
-# Image metadata
+# =============================================================================
+# Image Metadata
+# =============================================================================
 LABEL org.opencontainers.image.title="Hytale Dedicated Server"
 LABEL org.opencontainers.image.description="Hytale dedicated server with Java 25"
 LABEL org.opencontainers.image.vendor="EverHytale"
@@ -63,12 +32,18 @@ LABEL org.opencontainers.image.licenses="MIT"
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
+ARG HYTALE_VERSION
+
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.version="${VERSION}"
+LABEL hytale.version="${HYTALE_VERSION}"
 
-# Create non-root user with fixed UID/GID for Kubernetes compatibility
-# Fixed IDs ensure consistent permissions across pods and PVCs
+# =============================================================================
+# Create non-root user
+# =============================================================================
+# Fixed UID/GID for Kubernetes compatibility
+# Ensures consistent permissions across pods and PVCs
 ARG HYTALE_UID=1001
 ARG HYTALE_GID=1001
 
@@ -123,17 +98,24 @@ ENV EXTRA_ARGS=""
 
 # =============================================================================
 # Install game files to /opt/hytale-server
-# Using --chown in COPY to avoid extra layer and disk space
 # =============================================================================
+# Game files are provided via build-context named "game" from CI/CD
+# Using --chown in COPY to avoid extra layer and disk space
+
 RUN mkdir -p ${HYTALE_HOME} /server \
     && chown hytale:hytale ${HYTALE_HOME} /server
 
-# Copy server files with correct ownership (no extra chown layer needed)
-COPY --from=downloader --chown=hytale:hytale /game/Server/ ${HYTALE_HOME}/
-COPY --from=downloader --chown=hytale:hytale /game/Assets.zip ${HYTALE_HOME}/Assets.zip
+# Copy server files from build-context (provided by CI/CD pipeline)
+# The "game" context contains the extracted game files from hytale-downloader
+COPY --from=game --chown=hytale:hytale /Server/ ${HYTALE_HOME}/
+COPY --from=game --chown=hytale:hytale /Assets.zip ${HYTALE_HOME}/Assets.zip
 
 # Copy entrypoint script
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# =============================================================================
+# Runtime Configuration
+# =============================================================================
 
 # Working directory is /server (mounted volume for persistent data)
 WORKDIR /server
