@@ -94,6 +94,7 @@ jobs:
         timeout-minutes: 1
         run: |
           cp .hytale-credentials.json hytale-downloader/.hytale-downloader-credentials.json
+
           cd hytale-downloader
           ./hytale-downloader-linux-amd64 -print-version
           VERSION=$(timeout 30s ./hytale-downloader-linux-amd64 -print-version)
