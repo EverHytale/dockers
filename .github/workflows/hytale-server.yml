@@ -71,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     # Skip for PRs and description-only updates
     if: github.event.inputs.update_description_only != 'true'
+    environment: prod
     outputs:
       hytale_version: ${{ steps.hytale-version.outputs.version }}
       should_build: ${{ steps.check.outputs.should_build }}
