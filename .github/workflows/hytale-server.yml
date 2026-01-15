@@ -91,6 +91,7 @@ jobs:
         id: hytale-version
         timeout-minutes: 1
         run: |
+          ./hytale-downloader/hytale-downloader-linux-amd64 -print-version
           VERSION=$(timeout 30s ./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
 
           # Cleanup credentials
