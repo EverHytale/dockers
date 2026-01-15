@@ -1,21 +1,23 @@
 # =============================================================================
 # GitHub Actions Workflow - Hytale Server Docker Image
 # Repository: everhytale/dockers
-# Image: everhytale/hytale-server (Docker Hub)
 # =============================================================================
 # Multi-architecture build: amd64, arm64
 #
+# Registry Strategy:
+#   - Docker Hub: releases only (stable tags for public distribution)
+#   - GHCR: all builds (edge, dev, rc, releases for development/testing)
+#
 # Tag Strategy (SemVer with Hytale version):
-#   - v1.0.0          → 1.0.0_{HYTALE_VERSION}, {HYTALE_VERSION}, latest
-#   - v1.0.0-rc.1     → 1.0.0-rc.1_{HYTALE_VERSION}, rc
-#   - v1.0.0-dev.1    → 1.0.0-dev.1_{HYTALE_VERSION}, dev
-#   - main branch     → edge_{HYTALE_VERSION}
+#   - v1.0.0          → Docker Hub + GHCR: 1.0.0_{HYTALE_VERSION}, {HYTALE_VERSION}, latest, major, major.minor
+#   - v1.0.0-rc.1     → GHCR only: 1.0.0-rc.1_{HYTALE_VERSION}, rc
+#   - v1.0.0-dev.1    → GHCR only: 1.0.0-dev.1_{HYTALE_VERSION}, dev
+#   - main branch     → GHCR only: edge_{HYTALE_VERSION}, edge
 #   - schedule        → auto-build on new Hytale version (every 12h check)
 #
-# Example tags for Hytale version 2026.01.15-c04fdfe10:
-#   - 1.0.0_2026.01.15-c04fdfe10
-#   - 2026.01.15-c04fdfe10 (latest image for this Hytale version)
-#   - latest
+# Example tags for release v1.0.0 with Hytale version 2026.01.15-c04fdfe10:
+#   Docker Hub: everhytale/hytale-server:1.0.0_2026.01.15-c04fdfe10, :latest, :1, :1.0
+#   GHCR: ghcr.io/everhytale/hytale-server:1.0.0_2026.01.15-c04fdfe10, :latest, :1, :1.0
 # =============================================================================
 
 name: Hytale Server - Build & Push
@@ -54,9 +56,9 @@ on:
         default: 'false'
 
 env:
-  # Docker Hub image
+  # Docker Hub image (releases only)
   DOCKERHUB_IMAGE: everhytale/hytale-server
-  # GitHub Container Registry image (backup)
+  # GitHub Container Registry image (all builds: edge, dev, rc, releases)
   GHCR_IMAGE: ghcr.io/everhytale/hytale-server
   # Build context
   CONTEXT: ./dockers/hytale-server
@@ -92,8 +94,9 @@ jobs:
         timeout-minutes: 1
         run: |
           cp .hytale-credentials.json hytale-downloader/.hytale-downloader-credentials.json
-          ./hytale-downloader/hytale-downloader-linux-amd64 -print-version
-          VERSION=$(timeout 30s ./hytale-downloader/hytale-downloader-linux-amd64 -print-version)
+          cd hytale-downloader
+          ./hytale-downloader-linux-amd64 -print-version
+          VERSION=$(timeout 30s ./hytale-downloader-linux-amd64 -print-version)
 
           # Cleanup credentials
           rm -f hytale-downloader/.hytale-downloader-credentials.json
@@ -298,14 +301,17 @@ jobs:
           FULL_VERSION="${IMAGE_VERSION}_${HYTALE_VERSION}"
 
           # Start building tags list
+          # Docker Hub: only for releases
+          # GHCR: all builds (edge, dev, rc, release)
           TAGS=""
 
-          # Full version tag (always)
-          TAGS="${DOCKERHUB_IMAGE}:${FULL_VERSION}"
-          TAGS="${TAGS},${GHCR_IMAGE}:${FULL_VERSION}"
-
-          # Hytale version tag (latest image for this Hytale version) - only for releases
+          # Full version tag
           if [[ "$VERSION_TYPE" == "release" ]]; then
+            # Release: push to both Docker Hub and GHCR
+            TAGS="${DOCKERHUB_IMAGE}:${FULL_VERSION}"
+            TAGS="${TAGS},${GHCR_IMAGE}:${FULL_VERSION}"
+
+            # Hytale version tag (latest image for this Hytale version)
             TAGS="${TAGS},${DOCKERHUB_IMAGE}:${HYTALE_VERSION}"
             TAGS="${TAGS},${GHCR_IMAGE}:${HYTALE_VERSION}"
 
@@ -322,36 +328,39 @@ jobs:
             fi
             TAGS="${TAGS},${DOCKERHUB_IMAGE}:${MAJOR}.${MINOR}"
             TAGS="${TAGS},${GHCR_IMAGE}:${MAJOR}.${MINOR}"
-          fi
 
-          # RC tag
-          if [[ "$VERSION_TYPE" == "rc" ]]; then
-            TAGS="${TAGS},${DOCKERHUB_IMAGE}:rc"
-            TAGS="${TAGS},${GHCR_IMAGE}:rc"
-          fi
+            # SHA tag for releases (both registries)
+            SHORT_SHA="${GITHUB_SHA:0:7}"
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:sha-${SHORT_SHA}"
+            TAGS="${TAGS},${GHCR_IMAGE}:sha-${SHORT_SHA}"
+          else
+            # Non-release: push to GHCR only
+            TAGS="${GHCR_IMAGE}:${FULL_VERSION}"
 
-          # Dev tag
-          if [[ "$VERSION_TYPE" == "dev" ]]; then
-            TAGS="${TAGS},${DOCKERHUB_IMAGE}:dev"
-            TAGS="${TAGS},${GHCR_IMAGE}:dev"
-          fi
+            # RC tag
+            if [[ "$VERSION_TYPE" == "rc" ]]; then
+              TAGS="${TAGS},${GHCR_IMAGE}:rc"
+            fi
 
-          # Edge tag
-          if [[ "$VERSION_TYPE" == "edge" ]]; then
-            TAGS="${TAGS},${DOCKERHUB_IMAGE}:edge"
-            TAGS="${TAGS},${GHCR_IMAGE}:edge"
-          fi
+            # Dev tag
+            if [[ "$VERSION_TYPE" == "dev" ]]; then
+              TAGS="${TAGS},${GHCR_IMAGE}:dev"
+            fi
 
-          # SHA tag (always)
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          TAGS="${TAGS},${DOCKERHUB_IMAGE}:sha-${SHORT_SHA}"
-          TAGS="${TAGS},${GHCR_IMAGE}:sha-${SHORT_SHA}"
+            # Edge tag
+            if [[ "$VERSION_TYPE" == "edge" ]]; then
+              TAGS="${TAGS},${GHCR_IMAGE}:edge"
+            fi
 
-          # PR tag
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            TAGS="${TAGS},${DOCKERHUB_IMAGE}:pr-${PR_NUMBER}"
-            TAGS="${TAGS},${GHCR_IMAGE}:pr-${PR_NUMBER}"
+            # SHA tag (GHCR only for non-releases)
+            SHORT_SHA="${GITHUB_SHA:0:7}"
+            TAGS="${TAGS},${GHCR_IMAGE}:sha-${SHORT_SHA}"
+
+            # PR tag (GHCR only)
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              PR_NUMBER="${{ github.event.pull_request.number }}"
+              TAGS="${TAGS},${GHCR_IMAGE}:pr-${PR_NUMBER}"
+            fi
           fi
 
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
