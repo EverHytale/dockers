@@ -12,22 +12,29 @@ This is an unofficial community project. Hytale is a trademark of Hypixel Studio
 
 ## 📦 Image Tags
 
-| Tag | Description |
-|-----|-------------|
-| `latest` | Latest stable release |
-| `X.Y.Z` | Specific version (e.g., `1.0.0`) |
-| `X.Y` | Minor version (e.g., `1.0`) |
-| `rc` | Latest release candidate |
-| `X.Y.Z-rc.N` | Specific RC version (e.g., `1.0.0-rc.1`) |
-| `dev` | Latest development build |
-| `edge` | Latest build from main branch |
+All images use SemVer with Hytale version as build metadata:
+
+| Tag | Description | Example |
+|-----|-------------|---------|
+| `latest` | Latest stable release | `everhytale/hytale-server:latest` |
+| `X.Y.Z+HYTALE_VERSION` | Full version (image + Hytale) | `1.0.0+2026.01.15-c04fdfe10` |
+| `HYTALE_VERSION` | Latest image for this Hytale version | `2026.01.15-c04fdfe10` |
+| `X.Y` | Minor version (latest patch) | `1.0` |
+| `X` | Major version (latest minor) | `1` |
+| `rc` | Latest release candidate | `rc` |
+| `dev` | Latest development build | `dev` |
+| `edge` | Latest build from main branch | `edge` |
+
+### Automated Builds
+
+The CI/CD pipeline automatically checks for new Hytale versions **every 12 hours**. When a new version is detected, a new Docker image is built and pushed with the appropriate tags.
 
 ## ✨ Features
 
 - 🏗️ **Multi-architecture support**: `linux/amd64` and `linux/arm64`
 - ☕ **Java 25** (Eclipse Temurin)
 - 🔐 **Token-based authentication** via OAuth2 Device Flow
-- 📦 **Automated builds** via GitHub Actions
+- 📦 **Automated builds** via GitHub Actions (checks every 12h for new Hytale versions)
 - 🔄 **Automatic token refresh** scripts included
 - 🛡️ **Security-first**: runs as non-root user
 - 📊 **Health checks** built-in
@@ -44,8 +51,14 @@ This is an unofficial community project. Hytale is a trademark of Hypixel Studio
 ### Option 1: Use Pre-built Image
 
 ```bash
-# Pull the image (from Docker Hub)
+# Latest stable release
 docker pull everhytale/hytale-server:latest
+
+# Specific Hytale version (latest image for that version)
+docker pull everhytale/hytale-server:2026.01.15-c04fdfe10
+
+# Specific image + Hytale version
+docker pull everhytale/hytale-server:1.0.0+2026.01.15-c04fdfe10
 
 # Create data directory
 mkdir -p ./data
@@ -246,53 +259,65 @@ This method sets environment variables (`SESSION_TOKEN`, `IDENTITY_TOKEN`) that 
 
 ### Prerequisites
 
-You'll need Hytale credentials stored as a GitHub Secret or environment variable.
+You'll need Hytale credentials stored as a credentials file.
 
-### Local Build
+### Local Build (New Method)
+
+Game files are now downloaded separately before building:
 
 ```bash
-# Create credentials file (or use scripts/hytale-auth.sh)
+cd dockers/hytale-server
+
+# 1. Create credentials file (or use scripts/hytale-auth.sh)
 echo '{"access_token":"...", "refresh_token":"..."}' > .hytale-downloader-credentials.json
 
-# Build the image (credentials passed securely as secret)
-docker build \
-  --secret id=hytale_credentials,src=.hytale-downloader-credentials.json \
-  -t hytale-server:local .
+# 2. Download game files
+./scripts/download-game.sh
+
+# 3. Build the image with HYTALE_VERSION
+HYTALE_VERSION=$(cat game-files/.version) docker compose -f docker-compose.build.yml build
+
+# 4. Run the server
+docker compose -f docker-compose.build.yml up -d
 ```
 
-Or using Docker Compose:
-
-```bash
-docker compose -f docker-compose.build.yml build
-```
+The `download-game.sh` script will:
+- Download the Hytale downloader
+- Download game files using your credentials
+- Extract them to `./game-files/`
+- Save the version to `./game-files/.version`
 
 ### Multi-architecture Build
 
 ```bash
-# Create credentials file (or use scripts/hytale-auth.sh)
-echo '{"access_token":"...", "refresh_token":"..."}' > .hytale-downloader-credentials.json
-
-# Create buildx builder
-docker buildx create --name multiarch --use
-
-# Build for multiple platforms (credentials passed securely as secret)
-docker buildx build \
+# Build for multiple platforms
+HYTALE_VERSION=$(cat game-files/.version) docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --secret id=hytale_credentials,src=.hytale-downloader-credentials.json \
-  -t hytale-server:local \
+  --build-context game=./game-files \
+  --build-arg HYTALE_VERSION=$HYTALE_VERSION \
+  -t everhytale/hytale-server:local \
   --push .
 ```
 
-> **Security Note:** Credentials are mounted as a Docker secret and never appear in build logs or image layers.
+> **Security Note:** Credentials are never included in the Docker image. Game files are downloaded separately before the build.
 
 ## 🔄 GitHub Actions CI/CD
 
 The repository includes a GitHub Actions workflow that:
 
-1. Builds multi-architecture images (amd64, arm64)
-2. Pushes to GitHub Container Registry (ghcr.io)
-3. Optionally pushes to Docker Hub
-4. Runs security scans with Trivy
+1. **Checks for new Hytale versions every 12 hours**
+2. Builds multi-architecture images (amd64, arm64)
+3. Pushes to Docker Hub and GitHub Container Registry
+4. Uses SemVer tags with Hytale version as build metadata
+5. Runs security scans with Trivy
+
+### Tag Examples
+
+For a release `v1.0.0` with Hytale version `2026.01.15-c04fdfe10`:
+- `1.0.0+2026.01.15-c04fdfe10` (full version)
+- `2026.01.15-c04fdfe10` (Hytale version, latest image)
+- `1.0.0`, `1.0`, `1` (SemVer)
+- `latest`
 
 ### Required Secrets
 
@@ -380,4 +405,3 @@ Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTIN
 - **Docker Hub**: [everhytale/hytale-server](https://hub.docker.com/r/everhytale/hytale-server)
 - **GitHub Repository**: [everhytale/dockers](https://github.com/everhytale/dockers)
 - **Issues**: [GitHub Issues](https://github.com/everhytale/dockers/issues)
-
